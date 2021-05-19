@@ -1,1 +1,0 @@
-mongodb_password = "ekrem1234"
