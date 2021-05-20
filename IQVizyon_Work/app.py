@@ -21,8 +21,11 @@ db = MongoEngine()
 db.init_app(app)
 ma = Marshmallow(app)
 
-# Kullanıcı Giriş Kontrol Decorator
+
 def login_required(f):
+    '''
+        Kullanıcı Giriş Kontrol Decorator
+    '''
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'logged_in' in session:
@@ -33,6 +36,9 @@ def login_required(f):
 
 
 class Users(db.Document):
+    '''
+        User Model
+    '''
     user_id = db.StringField(default=str(uuid.uuid4()))
     name = db.StringField()
     email = db.EmailField(unique=True)
@@ -50,83 +56,109 @@ class Users(db.Document):
             "updated_at":self.updated_at
         }
 
+
 class UserSchema(ma.Schema):
+    '''
+        User Marshmallow Serialization
+    '''
     class Meta:
         fields = ("name", "email", "created_at", "updated_at")
 
 user_schema = UserSchema()
 users_schema = UserSchema(many=True)
 
+
 @app.route('/app/register', methods=['POST'])
 def app_register():
+    '''
+        Yeni Kullanıcı Kaydı
+    '''
     content = request.json
     user_obj = Users.objects(email=content["email"]).first()
     if user_obj:
         return make_response("Girdiğiniz Mail Adresi Kullanılmaktadır")
     else:
-        user = Users(name=content["name"],
+        user = Users(user_id=str(uuid.uuid4()),
+                     name=content["name"],
                      email=content["email"],
                      password=content["password"],
                      updated_at=datetime.datetime.now)
         user.save()
         return make_response("Kayıt Başarılı", 201)
 
-@app.route('/app/login', methods=['GET', 'POST'])
+@app.route('/app/login', methods=['POST'])
 def app_login():
-    if request.method == 'POST':
-        content = request.json
-        user_email = content["email"]
-        password = content["password"]
-        check_user = Users.objects(email=user_email).first()
-        if check_user:
-            check_password = check_user['password']
-            if check_password == password:
+    '''
+    Kullanıcı Login işlemi.
+    Login işlemi olmadan "register" haricinde hiç bir endpointe erişim sağlanamaz.
+    '''
+    content = request.json
+    user_email = content["email"]
+    password = content["password"]
+    check_user = Users.objects(email=user_email).first()
+    if check_user:
+        check_password = check_user['password']
+        if check_password == password:
 
-                # board_obj = Boards.objects(created_by=check_user["user_id"]).first()
-                # print(board_obj["name"])
-                session["logged_in"] = True
-                session["email"] = user_email
-                session["user_id"] = check_user["user_id"]
+            session["logged_in"] = True
+            session["email"] = user_email
+            session["user_id"] = check_user["user_id"]
 
-                return redirect(url_for("app_boards"))
-                #return make_response("Giriş Başarılı", 201)
-            else:
-                return make_response("Hatalı Parola", 404)
+            return redirect(url_for("app_user_active_boards"))
         else:
-            return make_response("Hatalı Kullanıcı Adı", 404)
+            return make_response("Hatalı Parola", 404)
+    else:
+        return make_response("Hatalı Kullanıcı Adı", 404)
+
+@app.route('/app/logout')
+@login_required
+def app_logout():
+    '''
+        Kullanıcı Logout İşlemi
+    '''
+    session.clear()
+    return make_response("Çıkış Yapıldı")
 
 @app.route('/app/users', methods=['GET', 'PUT', 'DELETE'])
 @login_required
 def app_each_user():
+    '''
+        Session kontrolü olduğu için giriş yapmış kullanıcı kendi bilgilerini çekip görüntüleyebilir.
+        Bir kullanıcı başka bir kullanıcının bilgilerine erişemez.
+    '''
     user_id = session["user_id"]
     if request.method == 'GET':
         user_obj = Users.objects(user_id=user_id).first()
 
         return make_response(user_schema.jsonify(user_obj.to_json()), 200)
 
-
-
     elif request.method == 'PUT':
         content = request.json
         user_obj = Users.objects(user_id=user_id).first()
-        # user_obj.update(name=content['name'], email=content['email'], password=content['password'], updated_at=datetime.datetime.now)
-        user_obj.name = content['name']
-        user_obj.email=content['email']
-        user_obj.password=content['password']
-        user_obj.updated_at=datetime.datetime.now
-        user_obj.save()
+        for obj in user_obj:
+            print(obj)
+        user_obj.update(name=content['name'],
+                        email=content['email'],
+                        password=content['password'],
+                        updated_at=datetime.datetime.now)
+
         return make_response("Güncelleme Başarılı", 204)
 
     elif request.method == 'DELETE':
         user_obj = Users.objects(user_id=user_id).first()
         user_obj.delete()
-        return make_response("", 204)
+        return redirect(url_for("app_logout"))
+
 
 
 STATUS_BOARD = ("Aktif", "Arşivlenmiş")
-
-#board_id = db.StringField(default=str(uuid.uuid4()))
+'''
+    STATUS_BOARD Tuples "board status" stadart bir kalıpta seçilebilsin diye oluşturuldu.
+'''
 class Boards(db.Document):
+    '''
+        Boards Model
+    '''
     board_id = db.StringField(default=str(uuid.uuid4()))
     name = db.StringField()
     status = db.StringField(choices=STATUS_BOARD, default="Aktif")
@@ -145,6 +177,9 @@ class Boards(db.Document):
         }
 
 class BoardSchema(ma.Schema):
+    '''
+        Board Serialization
+    '''
     class Meta:
         fields = ("name", "status", "created_by", "created_at")
 
@@ -155,6 +190,10 @@ boards_schema = BoardSchema(many=True)
 @app.route('/app/boards', methods=['GET', 'POST'])
 @login_required
 def app_boards():
+    '''
+        Bütün kartların listelenmesi
+        Session kontrolü ile kullanıcı kendisinin oluşturmadığı iş kayıtlarını göremez.
+    '''
     created_by = session["user_id"]
     if request.method == 'GET':
         boards = []
@@ -168,14 +207,24 @@ def app_boards():
 
     elif request.method == 'POST':
         content = request.json
-        board = Boards(name=content["name"], status=content["status"], created_by=created_by)
-        board.save()
-        return make_response("Kayıt Başarılı", 201)
+        if content["status"] in STATUS_BOARD:
+            board = Boards(board_id=str(uuid.uuid4()),
+                           name=content["name"],
+                           status=content["status"],
+                           created_by=created_by)
+            board.save()
+            return make_response("Kayıt Başarılı", 201)
+        else:
+            return make_response("Status Alanı Yanlış Girildi => Aktif / Arşivlenmiş", 404)
 
 
 @app.route('/app/boards/<board_id>', methods=['GET', 'PUT', 'DELETE'])
 @login_required
 def app_each_boards(board_id):
+    '''
+        Id'si gönderilen İş Kaydının listelenmesi, güncellenmesi ve silinmesi
+        Session kontrolü ile kullanıcı kendisinin oluşturmadığı iş kaydını göremez.
+    '''
     created_by = session["user_id"]
     if request.method == 'GET':
         board_obj = Boards.objects(board_id=board_id, created_by=created_by).first()
@@ -188,7 +237,9 @@ def app_each_boards(board_id):
         content = request.json
         board_obj = Boards.objects(board_id=board_id, created_by=created_by).first()
         if board_obj:
-            board_obj.update(name=content["name"], status=content["status"], updated_at=datetime.datetime.now)
+            board_obj.update(name=content["name"],
+                             status=content["status"],
+                             updated_at=datetime.datetime.now)
 
             return make_response("Güncelleme Tamamlandı", 204)
 
@@ -205,9 +256,32 @@ def app_each_boards(board_id):
         else:
             return make_response("Kayıt Bulunamadı", 404)
 
-STATUS_CARD = ["Alındı", "Başladı", "Kontrolde", "Tamamlandı"]
+@app.route('/app/user_active_boards', methods=['GET'])
+@login_required
+def app_user_active_boards():
+    '''
+        Kullanıcı başarılı bir şekinde Login olduğunda kullanıcıya ait aktif iş kayıtları listelenir.
+    '''
+    created_by = session["user_id"]
+    boards = []
+    board_obj = Boards.objects(Q(created_by=created_by) & Q(status="Aktif"))
+    if board_obj:
+        for board in board_obj:
+            boards.append(board)
+        return make_response(boards_schema.jsonify(boards), 200)
+    else:
+        return make_response("Kayıtlı Board Yoktur", 404)
 
+
+
+STATUS_CARD = ["Alındı", "Başladı", "Kontrolde", "Tamamlandı"]
+'''
+STATUS_CARD Tuple ile hatalı bilgi girişi engellendi.
+'''
 class Cards(db.Document):
+    '''
+        Cards Models
+    '''
     card_id = db.StringField(default=str(uuid.uuid4()))
     title = db.StringField()
     content = db.StringField()
@@ -239,8 +313,10 @@ class Cards(db.Document):
 
 class CardSchema(ma.Schema):
     class Meta:
-        fields = ("title", "content", "status", "assignee", "created_by", "board", "start_date",
-                  "due_date", "finished_at", "created_at", "updated_at")
+        fields = ("title", "content", "status",
+                  "assignee", "created_by", "board",
+                  "start_date", "due_date", "finished_at",
+                  "created_at", "updated_at")
 
 
 card_schema = CardSchema()
@@ -250,6 +326,10 @@ cards_schema = CardSchema(many=True)
 @app.route('/app/cards', methods=['GET', 'POST'])
 @login_required
 def app_cards():
+    '''
+        Bütün kartların listelenmesi
+        Session kontrolü ile kullanıcı yetkisi olmayan kartları göremez
+    '''
     user_id = session["user_id"]
     if request.method == 'GET':
         cards = []
@@ -263,20 +343,27 @@ def app_cards():
 
     elif request.method == 'POST':
         content = request.json
-        card = Cards(title=content["title"], content=content["content"], status=content["status"],
-                     assignee=content["assignee"], created_by=user_id, board=content["board"],
-                     start_date=content["start_date"], due_date=content["due_date"],
-                     updated_at=datetime.datetime.now)
-        card.save()
-        return make_response("Kayıt Başarılı", 201)
+
+        if content["status"] in STATUS_CARD:
+            card = Cards(card_id=str(uuid.uuid4()), title=content["title"], content=content["content"],
+                        status=content["status"], assignee=content["assignee"], created_by=user_id,
+                        board=content["board"], start_date=content["start_date"], due_date=content["due_date"],
+                        updated_at=datetime.datetime.now)
+            card.save()
+            return make_response("Kayıt Başarılı", 201)
+        else:
+            return make_response("Status Alanı Yanlış Girildi => Alındı / Başladı / Kontrolde / Tamamlandı")
 
 
 @app.route('/app/cards/<card_id>', methods=['GET', 'PUT', 'DELETE'])
 @login_required
 def app_each_cards(card_id):
+    '''
+        Id' Si gönderilen Kartı listeleme, güncelleme ve silme
+    '''
     user_id = session["user_id"]
     if request.method == 'GET':
-        card_obj = Cards.objects.filter(Q(car_id=card_id) and (Q(created_by=user_id) or Q(assignee=user_id))).first()
+        card_obj = Cards.objects.filter(Q(card_id=card_id) & (Q(created_by=user_id) | Q(assignee=user_id))).first()
         if card_obj:
             return make_response(card_schema.jsonify(card_obj.to_json()), 200)
         else:
@@ -284,7 +371,7 @@ def app_each_cards(card_id):
 
     elif request.method == 'PUT':
         content = request.json
-        card_obj = Cards.objects(Q(card_id=card_id) and (Q(created_by=user_id) or Q(assignee=user_id))).first()
+        card_obj = Cards.objects(Q(card_id=card_id) & (Q(created_by=user_id) | Q(assignee=user_id))).first()
         if card_obj:
             card_obj.update(title=content["title"],
                             content=content["content"],
@@ -298,7 +385,7 @@ def app_each_cards(card_id):
         else:
             return make_response("Kayıt Bulunamadı", 404)
     elif request.method == 'DELETE':
-        card_obj = Cards.objects(Q(card_id=card_id) and (Q(created_by=user_id) or Q(assignee=user_id))).first()
+        card_obj = Cards.objects(Q(card_id=card_id) & (Q(created_by=user_id) | Q(assignee=user_id))).first()
         if card_obj:
             card_obj.delete()
             return make_response("Kayıt Silindi", 204)
@@ -306,6 +393,9 @@ def app_each_cards(card_id):
             return make_response("Kayıt Bulunamadı", 404)
 
 class Comments(db.Document):
+    '''
+        Comments Model
+    '''
     comment_id = db.StringField(default=str(uuid.uuid4()))
     content = db.StringField()
     created_by = db.StringField()
@@ -334,11 +424,17 @@ comments_schema = CommentSchema(many=True)
 @app.route('/app/comments', methods=['GET', 'POST'])
 @login_required
 def app_comments():
+    '''
+        Bütün yorumların listelenmesi ve yeni yorum ekleme
+        Session kontrolü ile kullanıcı yetkisi olmayan yorumları listeleyemez
+    '''
+    created_by = session["user_id"]
     if request.method == 'GET':
         comments = []
-        for comment in Comments.objects:
+        comments_obj = Comments.objects(created_by=created_by)
+        for comment in comments_obj:
             comments.append(comment)
-        return make_response(comment_schema.jsonify(comments), 200)
+        return make_response(comments_schema.jsonify(comments), 200)
 
     elif request.method == 'POST':
         content = request.json
@@ -353,9 +449,11 @@ def app_comments():
 @app.route('/app/comments/<comment_id>', methods=['GET', 'PUT', 'DELETE'])
 @login_required
 def app_each_comments(comment_id):
+    '''
+        Id'si gönderilen yorumu listeleme, güncelleme ve silme
+    '''
     user_id = session["user_id"]
     if request.method == 'GET':
-        #card_obj = Cards.object(Q(created_by=user_id) | Q(assignee__in=user_id))
         comment_obj = Comments.objects(Q(created_by=user_id) & Q(comment_id=comment_id)).first()
         if comment_obj:
             return make_response(comment_schema.jsonify(comment_obj.to_json()), 200)
@@ -375,6 +473,25 @@ def app_each_comments(comment_id):
         comment_obj.delete()
         return make_response("", 204)
 
+@app.route('/app/card_comments/<card_id>', methods=['GET'])
+@login_required
+def app_card_comments(card_id):
+    '''
+        Id'si gönderilen kartın yorumlarını listeler
+        Session kontrolü ile kartı görmeye yetkisi olmayan kullanıcıların kart yorumunlarını görmesi engellenir.
+    '''
+    user_id = session["user_id"]
+    card_obj = Cards.objects(Q(created_by=user_id) | Q(assignee=user_id))
+    if card_obj:
+        comments = []
+        comment_obj = Comments.objects(card=card_id)
+        for comment in comment_obj:
+            comments.append(comment)
+        return make_response(comments_schema.jsonify(comments), 200)
+    else:
+        return make_response("Karta Yapılmış Yorum Yok")
+
+
 
 if __name__ == "__main__":
-    app.run()
+    app.run(host='0.0.0.0')
